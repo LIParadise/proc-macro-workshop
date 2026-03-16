@@ -1,4 +1,4 @@
-use proc_macro::TokenStream;
+use proc_macro::{Span, TokenStream};
 use quote::quote;
 use syn::{parse_macro_input, parse_quote, DataStruct, DeriveInput, Ident, Type};
 
@@ -28,6 +28,7 @@ pub fn derive(input: TokenStream) -> TokenStream {
         }
     }
 
+    let first_err = Ident::new("first_err", Span::mixed_site().into());
     quote! {
         impl #orig_ident {
             fn builder() -> #builder_ident {
@@ -37,15 +38,29 @@ pub fn derive(input: TokenStream) -> TokenStream {
             }
         }
         impl #builder_ident {
-            #(pub fn #idents(&mut self, #idents: #types) {
+            #(pub fn #idents(&mut self, #idents: #types) -> &mut #builder_ident {
                 self.#idents = Some(#idents);
+                self
             })*
-            fn build(self) -> Result<#orig_ident, String> {
-                #(if self.#idents.is_none() {
-                    const E: &str = stringify!(#builder_ident missing field #idents);
-                    Err(String::from(E))?;
-                })*
-                Ok(#orig_ident { #(#idents: self.#idents.unwrap(),)* })
+
+            /// Clear all the builder contents,
+            /// and if all ingredients are ready, return built product
+            fn build(&mut self) -> Result<#orig_ident, Box<dyn std::error::Error>> {
+                let mut #first_err = None;
+                #(
+                    let #idents = {
+                        const E: &str = stringify!(#builder_ident missing field #idents);
+                        self.#idents.take().ok_or(E)
+                    };
+                    if #first_err.is_none() {
+                        if let Err(e) = #idents {
+                            #first_err = Some(e);
+                        }
+                    }
+                )*
+                Ok(#orig_ident {
+                    #(#idents: #idents.unwrap()),*
+                })
             }
         }
         #definition
